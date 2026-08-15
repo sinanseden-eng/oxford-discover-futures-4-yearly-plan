@@ -14,10 +14,16 @@ import {
   Move,
   Type,
   Wand2,
-  Settings,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Cloud,
+  CloudOff,
+  LogIn,
+  LogOut,
+  Mail,
+  UserCheck
 } from "lucide-react";
+import { isSupabaseConfigured, supabase } from "./lib/supabase.js";
 
 const initialData = [
   // UNIT 1
@@ -501,8 +507,37 @@ const skillStyles = {
   }
 };
 
-const STORAGE_KEY = "oxford-discover-futures-4-plan-ai-v3";
-const API_KEY_STORAGE_KEY = "gemini_api_key_override";
+const STORAGE_KEY = "oxford-discover-futures-4-collaborative-v1";
+const PLAN_ID = "odf4-yearly-plan";
+const AUTOSAVE_DELAY_MS = 900;
+
+const toDatabaseRow = (item, index, userId = null) => ({
+  plan_id: PLAN_ID,
+  id: String(item.id),
+  week: String(item.week),
+  sort_order: index + 1,
+  unit: item.unit || "",
+  reading: item.reading || "",
+  listening: item.listening || "",
+  speaking: item.speaking || "",
+  writing: item.writing || "",
+  grammar: item.grammar || "",
+  vocabulary: item.vocabulary || "",
+  updated_by: userId
+});
+
+const fromDatabaseRow = (row) => ({
+  id: String(row.id),
+  week: String(row.week),
+  unit: row.unit || "",
+  reading: row.reading || "",
+  listening: row.listening || "",
+  speaking: row.speaking || "",
+  writing: row.writing || "",
+  grammar: row.grammar || "",
+  vocabulary: row.vocabulary || "",
+  _sortOrder: Number(row.sort_order) || Number(row.week) || 0
+});
 
 function parseItems(textStr) {
   if (!textStr || typeof textStr !== "string") return [];
@@ -518,179 +553,412 @@ function stringifyItems(itemsArr) {
 
 export default function App() {
   const [plan, setPlan] = useState(initialData);
-  const [saveStatus, setSaveStatus] = useState("Ready");
+  const [saveStatus, setSaveStatus] = useState("Loading shared plan...");
   const [viewMode, setViewMode] = useState("chips"); // 'chips' or 'text'
   const [editingItem, setEditingItem] = useState(null); // chip editor
 
   // AI & Modal States
   const [aiModalOpen, setAiModalOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [apiKeyInput, setApiKeyInput] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  // Shared backend & approved teacher authentication
+  const [session, setSession] = useState(null);
+  const [isApprovedEditor, setIsApprovedEditor] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [remoteReady, setRemoteReady] = useState(!isSupabaseConfigured);
+  const [remoteHasData, setRemoteHasData] = useState(false);
+
+  const canEdit = Boolean(session && isApprovedEditor);
 
   // Drag references
   const dragRowItem = useRef(null);
   const dragRowOverItem = useRef(null);
   const draggedChipRef = useRef(null);
+  const planRef = useRef(initialData);
+  const dirtyIdsRef = useRef(new Set());
+  const deletedIdsRef = useRef(new Set());
+  const autosaveTimerRef = useRef(null);
+  const savingRef = useRef(false);
+  const canEditRef = useRef(false);
+  const remoteReadyRef = useRef(!isSupabaseConfigured);
+
+  canEditRef.current = canEdit;
+  remoteReadyRef.current = remoteReady;
+
+  const updatePlanState = (nextPlan) => {
+    planRef.current = nextPlan;
+    setPlan(nextPlan);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextPlan));
+  };
+
+  const flushPendingChanges = async () => {
+    clearTimeout(autosaveTimerRef.current);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(planRef.current));
+
+    if (!isSupabaseConfigured || !supabase || !canEditRef.current || !remoteReadyRef.current) {
+      setSaveStatus(isSupabaseConfigured ? "View only" : "Saved locally");
+      return;
+    }
+
+    if (savingRef.current) {
+      autosaveTimerRef.current = setTimeout(() => {
+        void flushPendingChanges();
+      }, AUTOSAVE_DELAY_MS);
+      return;
+    }
+
+    const dirtyIds = [...dirtyIdsRef.current];
+    const deletedIds = [...deletedIdsRef.current];
+    if (dirtyIds.length === 0 && deletedIds.length === 0) {
+      setSaveStatus("Saved automatically");
+      return;
+    }
+
+    dirtyIdsRef.current.clear();
+    deletedIdsRef.current.clear();
+    savingRef.current = true;
+    setSaveStatus("Saving...");
+
+    try {
+      if (deletedIds.length > 0) {
+        const { error: deleteError } = await supabase
+          .from("plan_weeks")
+          .delete()
+          .eq("plan_id", PLAN_ID)
+          .in("id", deletedIds);
+
+        if (deleteError) throw deleteError;
+      }
+
+      const latestPlan = planRef.current;
+      const rows = latestPlan
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => dirtyIds.includes(String(item.id)))
+        .map(({ item, index }) =>
+          toDatabaseRow(item, index, session?.user?.id || null)
+        );
+
+      if (rows.length > 0) {
+        const { error: upsertError } = await supabase
+          .from("plan_weeks")
+          .upsert(rows, { onConflict: "plan_id,id" });
+
+        if (upsertError) throw upsertError;
+      }
+
+      setRemoteHasData(true);
+      setSaveStatus("Saved automatically");
+    } catch (error) {
+      dirtyIds.forEach((id) => dirtyIdsRef.current.add(id));
+      deletedIds.forEach((id) => deletedIdsRef.current.add(id));
+      console.error("Automatic save failed:", error);
+      setSaveStatus("Save failed — retrying");
+    } finally {
+      savingRef.current = false;
+      if (dirtyIdsRef.current.size > 0 || deletedIdsRef.current.size > 0) {
+        autosaveTimerRef.current = setTimeout(() => {
+          void flushPendingChanges();
+        }, AUTOSAVE_DELAY_MS);
+      }
+    }
+  };
+
+  const markDirty = (ids) => {
+    ids.forEach((id) => {
+      dirtyIdsRef.current.add(String(id));
+      deletedIdsRef.current.delete(String(id));
+    });
+    setSaveStatus("Saving soon...");
+    clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      void flushPendingChanges();
+    }, AUTOSAVE_DELAY_MS);
+  };
+
+  const applyPlanChange = (nextPlan, changedIds) => {
+    updatePlanState(nextPlan);
+    markDirty(changedIds);
+  };
+
+  const refreshEditorAccess = async (nextSession) => {
+    setSession(nextSession || null);
+    if (!nextSession || !supabase) {
+      setIsApprovedEditor(false);
+      return;
+    }
+
+    const { data, error } = await supabase.rpc("is_current_user_approved");
+    if (error) {
+      console.error("Editor access check failed:", error);
+      setIsApprovedEditor(false);
+      setAuthMessage("Signed in, but editor permission could not be verified.");
+      return;
+    }
+
+    const approved = data === true;
+    setIsApprovedEditor(approved);
+    setAuthMessage(
+      approved
+        ? "Approved teacher access enabled."
+        : "This account is signed in but is not on the approved-teachers list."
+    );
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) setPlan(parsed);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          planRef.current = parsed;
+          setPlan(parsed);
+        }
       } catch (error) {
-        console.error("Stored plan failed to load:", error);
+        console.error("Stored backup failed to load:", error);
       }
     }
 
-    const savedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
-    if (savedKey) {
-      setApiKeyInput(savedKey);
+    if (!isSupabaseConfigured) {
+      setSaveStatus("Local mode — connect Supabase to share");
     }
   }, []);
 
-  const getEffectiveApiKey = () => {
-    // 1. Manual user override in state/localStorage
-    if (apiKeyInput && apiKeyInput.trim()) return apiKeyInput.trim();
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return undefined;
 
-    // 2. Safe check for environment variables without unhandled import.meta syntax issues
-    try {
-      if (typeof process !== "undefined" && process?.env?.VITE_GEMINI_API_KEY) {
-        return process.env.VITE_GEMINI_API_KEY;
+    let active = true;
+
+    const loadSharedPlan = async () => {
+      const { data, error } = await supabase
+        .from("plan_weeks")
+        .select("*")
+        .eq("plan_id", PLAN_ID)
+        .order("sort_order", { ascending: true });
+
+      if (!active) return;
+
+      if (error) {
+        console.error("Shared plan failed to load:", error);
+        setSaveStatus("Cloud unavailable — showing local backup");
+        setRemoteReady(true);
+        return;
       }
-      if (typeof process !== "undefined" && process?.env?.REACT_APP_GEMINI_API_KEY) {
-        return process.env.REACT_APP_GEMINI_API_KEY;
+
+      if (data && data.length > 0) {
+        const sharedPlan = data.map(fromDatabaseRow);
+        updatePlanState(sharedPlan);
+        setRemoteHasData(true);
+        setSaveStatus("Shared plan loaded");
+      } else {
+        setRemoteHasData(false);
+        setSaveStatus("Shared plan ready for first approved editor");
       }
-    } catch (err) {
-      // ignore check error
+      setRemoteReady(true);
+    };
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (active) void refreshEditorAccess(data.session);
+    });
+    void loadSharedPlan();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, nextSession) => {
+        if (!active) return;
+        setSession(nextSession);
+        window.setTimeout(() => {
+          if (active) void refreshEditorAccess(nextSession);
+        }, 0);
+      }
+    );
+
+    const channel = supabase
+      .channel("shared-plan-" + PLAN_ID)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "plan_weeks",
+          filter: "plan_id=eq." + PLAN_ID
+        },
+        (payload) => {
+          const changedId = String(payload.new?.id || payload.old?.id || "");
+          if (!changedId || dirtyIdsRef.current.has(changedId)) return;
+
+          if (payload.eventType === "DELETE") {
+            const nextPlan = planRef.current.filter(
+              (item) => String(item.id) !== changedId
+            );
+            updatePlanState(nextPlan);
+            return;
+          }
+
+          const incoming = fromDatabaseRow(payload.new);
+          const current = [...planRef.current];
+          const existingIndex = current.findIndex(
+            (item) => String(item.id) === changedId
+          );
+
+          if (existingIndex >= 0) current[existingIndex] = incoming;
+          else current.push(incoming);
+
+          current.sort(
+            (a, b) =>
+              (a._sortOrder || Number(a.week) || 0) -
+              (b._sortOrder || Number(b.week) || 0)
+          );
+          updatePlanState(current);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      authListener.subscription.unsubscribe();
+      void supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !isSupabaseConfigured ||
+      !supabase ||
+      !canEdit ||
+      !remoteReady ||
+      remoteHasData
+    ) {
+      return;
     }
 
-    return "";
+    const seedSharedPlan = async () => {
+      setSaveStatus("Creating shared 36-week plan...");
+      const sourcePlan =
+        planRef.current.length >= 36 ? planRef.current : initialData;
+      const rows = sourcePlan.map((item, index) =>
+        toDatabaseRow(item, index, session?.user?.id || null)
+      );
+      const { error } = await supabase
+        .from("plan_weeks")
+        .upsert(rows, { onConflict: "plan_id,id" });
+
+      if (error) {
+        console.error("Initial shared plan creation failed:", error);
+        setSaveStatus("Could not create shared plan");
+        return;
+      }
+
+      setRemoteHasData(true);
+      setSaveStatus("Shared plan created and saved");
+    };
+
+    void seedSharedPlan();
+  }, [canEdit, remoteHasData, remoteReady, session]);
+
+  useEffect(
+    () => () => {
+      clearTimeout(autosaveTimerRef.current);
+    },
+    []
+  );
+
+  const requestLoginLink = async (event) => {
+    event.preventDefault();
+    if (!supabase || !authEmail.trim()) return;
+
+    setAuthLoading(true);
+    setAuthMessage("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail.trim().toLowerCase(),
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: window.location.origin
+      }
+    });
+
+    setAuthLoading(false);
+    setAuthMessage(
+      error
+        ? error.message
+        : "If this address was invited, a secure sign-in link has been sent."
+    );
   };
 
-  const savePlan = () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(plan));
-    setSaveStatus("Saved");
-    setTimeout(() => setSaveStatus("Ready"), 1800);
+  const signOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setSession(null);
+    setIsApprovedEditor(false);
+    setAuthMessage("Signed out. The shared plan remains available to view.");
   };
 
-  const saveApiKeySetting = (key) => {
-    setApiKeyInput(key);
-    if (key.trim()) {
-      localStorage.setItem(API_KEY_STORAGE_KEY, key.trim());
+  const savePlan = async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(planRef.current));
+    if (canEditRef.current) {
+      markDirty(planRef.current.map((item) => item.id));
+      await flushPendingChanges();
     } else {
-      localStorage.removeItem(API_KEY_STORAGE_KEY);
+      setSaveStatus(isSupabaseConfigured ? "View only" : "Saved locally");
     }
   };
 
   const handleArrangeWithGemini = async () => {
+    if (!canEdit) {
+      setAiError("Approved teacher access is required.");
+      return;
+    }
     if (!aiPrompt.trim()) {
       setAiError("Please type instructions or paste raw text for Gemini to arrange.");
       return;
     }
+    if (!supabase) {
+      setAiError("Connect Supabase before using secure AI arrangement.");
+      return;
+    }
 
-    const apiKey = getEffectiveApiKey();
     setAiLoading(true);
     setAiError("");
 
     try {
-      const systemInstruction = `Act as an expert ELT Curriculum Designer for 'Oxford Discover Futures 4' (CEFR B2).
-Your job is to take the user's input (instructions, textbook text, or rearrangement request) and re-arrange or update the 36-week lesson plan JSON.
-Return a valid JSON array of week objects matching the schema:
-[
-  {
-    "id": "1",
-    "week": "1",
-    "unit": "Unit Title & Focus",
-    "reading": "Reading subskills and texts...",
-    "listening": "Listening subskills and audio tasks...",
-    "speaking": "Speaking goals and key phrases...",
-    "writing": "Writing tasks and strategies...",
-    "grammar": "Grammar structures...",
-    "vocabulary": "Vocabulary words and idioms..."
-  }
-]
-Maintain existing weeks unless the user requests adding, deleting, or completely reorganizing. Keep descriptions concise and clear.`;
-
-      const userMessage = `Current Plan Overview: ${JSON.stringify(plan)}... (Total ${plan.length} weeks).
-      
-User Request / Raw Text:
-"${aiPrompt}"
-
-Please output an updated 36-week curriculum JSON matching the schema.`;
-
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
-
-      const payload = {
-        contents: [{ parts: [{ text: userMessage }] }],
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                id: { type: "STRING" },
-                week: { type: "STRING" },
-                unit: { type: "STRING" },
-                reading: { type: "STRING" },
-                listening: { type: "STRING" },
-                speaking: { type: "STRING" },
-                writing: { type: "STRING" },
-                grammar: { type: "STRING" },
-                vocabulary: { type: "STRING" }
-              },
-              required: ["week", "unit", "reading", "listening", "speaking", "writing", "grammar", "vocabulary"]
-            }
-          }
+      const { data, error } = await supabase.functions.invoke("arrange-plan", {
+        body: {
+          plan: planRef.current,
+          prompt: aiPrompt.trim()
         }
-      };
-
-      const res = await fetch(apiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
       });
 
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson?.error?.message || `API error (${res.status}). Ensure your Gemini API Key is set.`);
+      if (error) throw error;
+
+      const parsedPlan = data?.plan;
+      if (!Array.isArray(parsedPlan) || parsedPlan.length !== 36) {
+        throw new Error("Gemini must return exactly 36 weeks; no changes were saved.");
       }
 
-      const result = await res.json();
-      const rawJsonText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      const formatted = parsedPlan.map((item, index) => ({
+        ...item,
+        id: String(planRef.current[index]?.id || index + 1),
+        week: String(item.week || index + 1),
+        _sortOrder: index + 1
+      }));
 
-      if (!rawJsonText) {
-        throw new Error("Received empty response from Gemini API.");
-      }
-
-      const parsedPlan = JSON.parse(rawJsonText);
-  if (Array.isArray(parsedPlan) && parsedPlan.length === 36) {
-        const formatted = parsedPlan.map((item, idx) => ({
-          ...item,
-          id: item.id || (idx + 1).toString()
-        }));
-        setPlan(formatted);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(formatted));
-        setSaveStatus("Saved (AI Updated)");
-        setAiModalOpen(false);
-        setAiPrompt("");
-      } else {
-        throw new Error("Gemini returned invalid plan data format.");
-      }
-    } catch (err) {
-      console.error("AI Generation Error:", err);
-      setAiError(err.message || "Failed to process text with Gemini AI.");
+      applyPlanChange(
+        formatted,
+        formatted.map((item) => item.id)
+      );
+      setAiModalOpen(false);
+      setAiPrompt("");
+      setSaveStatus("AI update queued for automatic save");
+    } catch (error) {
+      console.error("AI generation failed:", error);
+      setAiError(error.message || "Failed to process the plan with Gemini.");
     } finally {
       setAiLoading(false);
     }
   };
-
   const exportPlan = () => {
     const headers = [
       "Week",
@@ -729,6 +997,7 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
   const printPlan = () => window.print();
 
   const dragRowStart = (event, position) => {
+    if (!canEdit) return;
     dragRowItem.current = position;
     const target = event.currentTarget;
     setTimeout(() => {
@@ -742,6 +1011,7 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
   };
 
   const dragRowEnd = (event) => {
+    if (!canEdit) return;
     if (event.currentTarget) event.currentTarget.style.opacity = "1";
     if (
       dragRowItem.current !== null &&
@@ -752,14 +1022,21 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
       const dragged = updated[dragRowItem.current];
       updated.splice(dragRowItem.current, 1);
       updated.splice(dragRowOverItem.current, 0, dragged);
-      setPlan(updated);
-      setSaveStatus("Unsaved changes");
+      const reordered = updated.map((item, index) => ({
+        ...item,
+        _sortOrder: index + 1
+      }));
+      applyPlanChange(
+        reordered,
+        reordered.map((item) => item.id)
+      );
     }
     dragRowItem.current = null;
     dragRowOverItem.current = null;
   };
 
   const handleChipDragStart = (e, weekIndex, field, itemIndex, itemText) => {
+    if (!canEdit) return;
     e.stopPropagation();
     draggedChipRef.current = { weekIndex, field, itemIndex, itemText };
     e.dataTransfer.setData(
@@ -775,6 +1052,7 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
   };
 
   const handleCellDrop = (e, targetWeekIndex, targetField) => {
+    if (!canEdit) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -802,44 +1080,44 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
     targetItems.push(itemText);
     updated[targetWeekIndex][targetField] = stringifyItems(targetItems);
 
-    setPlan(updated);
-    setSaveStatus("Unsaved changes");
+    applyPlanChange(updated, [updated[srcWeek].id, updated[targetWeekIndex].id]);
     draggedChipRef.current = null;
   };
 
   const updateItemRaw = (index, field, value) => {
+    if (!canEdit) return;
     const updated = [...plan];
     updated[index] = { ...updated[index], [field]: value };
-    setPlan(updated);
-    setSaveStatus("Unsaved changes");
+    applyPlanChange(updated, [updated[index].id]);
   };
 
   const deleteChip = (weekIndex, field, chipIndex) => {
+    if (!canEdit) return;
     const updated = [...plan];
     const items = parseItems(updated[weekIndex][field]);
     items.splice(chipIndex, 1);
     updated[weekIndex][field] = stringifyItems(items);
-    setPlan(updated);
-    setSaveStatus("Unsaved changes");
+    applyPlanChange(updated, [updated[weekIndex].id]);
   };
 
   const addNewChip = (weekIndex, field) => {
+    if (!canEdit) return;
     const newTopic = prompt("Enter new word, skill, or topic:");
     if (!newTopic || !newTopic.trim()) return;
     const updated = [...plan];
     const items = parseItems(updated[weekIndex][field]);
     items.push(newTopic.trim());
     updated[weekIndex][field] = stringifyItems(items);
-    setPlan(updated);
-    setSaveStatus("Unsaved changes");
+    applyPlanChange(updated, [updated[weekIndex].id]);
   };
 
   const startEditingChip = (weekIndex, field, itemIndex, currentText) => {
+    if (!canEdit) return;
     setEditingItem({ weekIndex, field, itemIndex, text: currentText });
   };
 
   const saveChipEdit = () => {
-    if (!editingItem) return;
+    if (!canEdit || !editingItem) return;
     const { weekIndex, field, itemIndex, text } = editingItem;
     const updated = [...plan];
     const items = parseItems(updated[weekIndex][field]);
@@ -849,12 +1127,12 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
       items.splice(itemIndex, 1);
     }
     updated[weekIndex][field] = stringifyItems(items);
-    setPlan(updated);
-    setSaveStatus("Unsaved changes");
+    applyPlanChange(updated, [updated[weekIndex].id]);
     setEditingItem(null);
   };
 
   const addRow = () => {
+    if (!canEdit) return;
     const newRow = {
       id: Date.now().toString(),
       week: (plan.length + 1).toString(),
@@ -864,15 +1142,23 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
       speaking: "",
       writing: "",
       grammar: "",
-      vocabulary: ""
+      vocabulary: "",
+      _sortOrder: plan.length + 1
     };
-    setPlan([...plan, newRow]);
-    setSaveStatus("Unsaved changes");
+    applyPlanChange([...plan, newRow], [newRow.id]);
   };
 
   const removeRow = (id) => {
-    setPlan(plan.filter((item) => item.id !== id));
-    setSaveStatus("Unsaved changes");
+    if (!canEdit) return;
+    const stringId = String(id);
+    deletedIdsRef.current.add(stringId);
+    dirtyIdsRef.current.delete(stringId);
+    const nextPlan = plan
+      .filter((item) => String(item.id) !== stringId)
+      .map((item, index) => ({ ...item, _sortOrder: index + 1 }));
+    updatePlanState(nextPlan);
+    markDirty(nextPlan.map((item) => item.id));
+    deletedIdsRef.current.add(stringId);
     setConfirmDeleteId(null);
   };
 
@@ -918,43 +1204,128 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
                   <span className="rounded-full border border-white/30 bg-white/20 px-3 py-1 text-xs font-bold backdrop-blur">
                     {plan.length} Scheduled Weeks
                   </span>
-                  <span className="rounded-full border border-white/30 bg-white/20 px-3 py-1 text-xs font-bold backdrop-blur">
-                    Status: {saveStatus}
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/30 bg-white/20 px-3 py-1 text-xs font-bold backdrop-blur">
+                    {isSupabaseConfigured ? <Cloud size={13} /> : <CloudOff size={13} />}
+                    {saveStatus}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* ACTION BUTTONS */}
-            <div className="no-print flex flex-wrap items-center gap-2.5">
-              <button
-                onClick={() => setAiModalOpen(true)}
-                className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-amber-200 to-yellow-300 text-amber-950 px-4 py-2.5 font-black shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl"
-              >
-                <Wand2 size={18} className="text-amber-800" />
-                AI Arrange with Gemini
-              </button>
+            {/* AUTHENTICATION & ACTION BUTTONS */}
+            <div className="no-print flex max-w-3xl flex-wrap items-center justify-end gap-2.5">
+              {!isSupabaseConfigured ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-white/30 bg-slate-900/25 px-3 py-2 text-xs font-bold text-white backdrop-blur">
+                  <CloudOff size={16} />
+                  Backend setup required
+                </div>
+              ) : session ? (
+                <div className="rounded-2xl border border-white/35 bg-white/20 px-3 py-2 text-white shadow backdrop-blur">
+                  <div className="flex items-center gap-2 text-xs font-black">
+                    <UserCheck size={16} />
+                    <span className="max-w-[210px] truncate">
+                      {session.user.email}
+                    </span>
+                    <span
+                      className={
+                        canEdit
+                          ? "rounded-full bg-emerald-400/30 px-2 py-0.5 text-emerald-50"
+                          : "rounded-full bg-slate-900/25 px-2 py-0.5 text-white/80"
+                      }
+                    >
+                      {canEdit ? "Approved editor" : "View only"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={signOut}
+                      className="rounded-lg p-1 hover:bg-white/20"
+                      title="Sign out"
+                    >
+                      <LogOut size={15} />
+                    </button>
+                  </div>
+                  {authMessage && (
+                    <p className="mt-1 max-w-sm text-[10px] font-semibold text-white/80">
+                      {authMessage}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <form
+                  onSubmit={requestLoginLink}
+                  className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/35 bg-white/20 p-2 shadow backdrop-blur"
+                >
+                  <label className="sr-only" htmlFor="teacher-email">
+                    Approved teacher email
+                  </label>
+                  <div className="relative">
+                    <Mail
+                      size={15}
+                      className="pointer-events-none absolute left-2.5 top-2.5 text-orange-500"
+                    />
+                    <input
+                      id="teacher-email"
+                      type="email"
+                      value={authEmail}
+                      onChange={(event) => setAuthEmail(event.target.value)}
+                      placeholder="Approved teacher email"
+                      required
+                      className="w-56 rounded-xl border-0 bg-white py-2 pl-8 pr-3 text-xs font-semibold text-slate-800 outline-none ring-orange-200 focus:ring-4"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {authLoading ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <LogIn size={15} />
+                    )}
+                    Email sign-in
+                  </button>
+                  {authMessage && (
+                    <p className="w-full px-1 text-[10px] font-semibold text-white">
+                      {authMessage}
+                    </p>
+                  )}
+                </form>
+              )}
+
+              {canEdit && (
+                <>
+                  <button
+                    onClick={() => setAiModalOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-amber-200 to-yellow-300 px-4 py-2.5 font-black text-amber-950 shadow-lg transition hover:-translate-y-0.5 hover:shadow-xl"
+                  >
+                    <Wand2 size={18} className="text-amber-800" />
+                    AI Arrange
+                  </button>
+                  <button
+                    onClick={addRow}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 font-bold text-orange-600 shadow transition hover:-translate-y-0.5 hover:bg-orange-50"
+                  >
+                    <Plus size={18} strokeWidth={2.6} /> Add Week
+                  </button>
+                  <button
+                    onClick={savePlan}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-white/30 bg-white/20 px-3.5 py-2.5 font-bold text-white shadow backdrop-blur transition hover:-translate-y-0.5 hover:bg-white/30"
+                  >
+                    <Save size={18} /> Save now
+                  </button>
+                </>
+              )}
+
               <button
                 onClick={() =>
                   setViewMode(viewMode === "chips" ? "text" : "chips")
                 }
-                className="inline-flex items-center gap-2 rounded-2xl bg-white/20 hover:bg-white/30 text-white border border-white/40 px-3.5 py-2.5 font-bold shadow backdrop-blur transition hover:-translate-y-0.5"
+                className="inline-flex items-center gap-2 rounded-2xl border border-white/40 bg-white/20 px-3.5 py-2.5 font-bold text-white shadow backdrop-blur transition hover:-translate-y-0.5 hover:bg-white/30"
                 title="Toggle View Mode"
               >
                 {viewMode === "chips" ? <Type size={18} /> : <Move size={18} />}
-                {viewMode === "chips" ? "Text Mode" : "Draggable Mode"}
-              </button>
-              <button
-                onClick={addRow}
-                className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 font-bold text-orange-600 shadow transition hover:-translate-y-0.5 hover:bg-orange-50"
-              >
-                <Plus size={18} strokeWidth={2.6} /> Add Week
-              </button>
-              <button
-                onClick={savePlan}
-                className="inline-flex items-center gap-2 rounded-2xl border border-white/30 bg-white/20 px-3.5 py-2.5 font-bold text-white shadow backdrop-blur transition hover:-translate-y-0.5 hover:bg-white/30"
-              >
-                <Save size={18} /> Save
+                {viewMode === "chips" ? "Text Mode" : "Card Mode"}
               </button>
               <button
                 onClick={exportPlan}
@@ -967,13 +1338,6 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
                 className="inline-flex items-center gap-2 rounded-2xl border border-white/30 bg-white/20 px-3.5 py-2.5 font-bold text-white shadow backdrop-blur transition hover:-translate-y-0.5 hover:bg-white/30"
               >
                 <Printer size={18} /> Print
-              </button>
-              <button
-                onClick={() => setSettingsOpen(true)}
-                className="inline-flex items-center gap-2 rounded-2xl border border-white/30 bg-white/20 p-2.5 font-bold text-white shadow backdrop-blur transition hover:-translate-y-0.5 hover:bg-white/30"
-                title="API Settings"
-              >
-                <Settings size={18} />
               </button>
             </div>
           </div>
@@ -1074,35 +1438,6 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
         </div>
       )}
 
-      {/* SETTINGS MODAL */}
-      {settingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm no-print">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-slate-200">
-            <h3 className="text-lg font-black text-slate-900 mb-2 flex items-center gap-2">
-              <Settings size={20} className="text-orange-500" /> Gemini API Settings
-            </h3>
-            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-              When deployed on <strong>Netlify</strong>, the app reads the <code>VITE_GEMINI_API_KEY</code> environment variable automatically. If needed, you can override it here.
-            </p>
-            <input
-              type="password"
-              value={apiKeyInput}
-              onChange={(e) => saveApiKeySetting(e.target.value)}
-              placeholder="Paste Gemini API Key override (optional)"
-              className="w-full rounded-2xl border-2 border-slate-200 p-3 text-sm font-mono outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-100 mb-4"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setSettingsOpen(false)}
-                className="rounded-xl bg-orange-500 px-5 py-2 text-sm font-bold text-white shadow hover:bg-orange-600"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* CONFIRM DELETE MODAL */}
       {confirmDeleteId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm no-print">
@@ -1167,6 +1502,14 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
 
       {/* PLAN GRID TABLE */}
       <div className="max-w-[1600px] mx-auto">
+        {!canEdit && (
+          <div className="no-print mb-3 flex items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-bold text-sky-800">
+            <UserCheck size={17} />
+            {session
+              ? "This signed-in account has read-only access. The owner must add its email to the approved-teachers list before it can edit."
+              : "Public read-only view. Sign in above with an approved teacher email to edit and autosave."}
+          </div>
+        )}
         <div className="hidden xl:grid grid-cols-[50px_70px_1.3fr_1fr_1fr_1fr_1fr_1fr_1fr_50px] gap-3 rounded-t-3xl bg-slate-800 px-5 py-3 text-xs font-black text-white shadow-xl print:hidden">
           <div className="flex justify-center items-center">
             <GripVertical size={16} />
@@ -1185,7 +1528,10 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
         </div>
 
         {/* PLAN ROWS */}
-        <div className="flex flex-col gap-4 xl:gap-0">
+        <fieldset
+          disabled={!canEdit}
+          className="flex flex-col gap-4 xl:gap-0"
+        >
           {plan.map((item, weekIdx) => {
             const semesterLabel = getSemesterLabel(weekIdx);
             return (
@@ -1197,7 +1543,7 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
                 )}
 
                 <div
-                  draggable
+                  draggable={canEdit}
                   onDragStart={(event) => dragRowStart(event, weekIdx)}
                   onDragEnter={(event) => dragRowEnter(event, weekIdx)}
                   onDragEnd={dragRowEnd}
@@ -1283,7 +1629,7 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
                                 {items.map((chipText, chipIdx) => (
                                   <div
                                     key={chipIdx}
-                                    draggable
+                                    draggable={canEdit}
                                     onDragStart={(e) =>
                                       handleChipDragStart(
                                         e,
@@ -1368,7 +1714,7 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
               </React.Fragment>
             );
           })}
-        </div>
+        </fieldset>
       </div>
     </div>
   );
