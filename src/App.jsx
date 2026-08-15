@@ -501,7 +501,7 @@ const skillStyles = {
   }
 };
 
-const STORAGE_KEY = "oxford-discover-futures-4-plan-ai-v2";
+const STORAGE_KEY = "oxford-discover-futures-4-plan-ai-v3";
 const API_KEY_STORAGE_KEY = "gemini_api_key_override";
 
 function parseItems(textStr) {
@@ -616,7 +616,7 @@ Return a valid JSON array of week objects matching the schema:
 ]
 Maintain existing weeks unless the user requests adding, deleting, or completely reorganizing. Keep descriptions concise and clear.`;
 
-      const userMessage = `Current Plan Overview: ${JSON.stringify(plan.slice(0, 10))}... (Total ${plan.length} weeks).
+      const userMessage = `Current Plan Overview: ${JSON.stringify(plan)}... (Total ${plan.length} weeks).
       
 User Request / Raw Text:
 "${aiPrompt}"
@@ -670,7 +670,7 @@ Please output an updated 36-week curriculum JSON matching the schema.`;
       }
 
       const parsedPlan = JSON.parse(rawJsonText);
-      if (Array.isArray(parsedPlan) && parsedPlan.length > 0) {
+  if (Array.isArray(parsedPlan) && parsedPlan.length === 36) {
         const formatted = parsedPlan.map((item, idx) => ({
           ...item,
           id: item.id || (idx + 1).toString()
