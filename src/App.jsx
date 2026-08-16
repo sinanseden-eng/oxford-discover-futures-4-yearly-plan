@@ -931,7 +931,22 @@ export default function App() {
         }
       });
 
-      if (error) throw error;
+     if (error) {
+  let detailedMessage = error.message;
+
+  try {
+    const errorBody = await error.context?.json();
+
+    detailedMessage =
+      errorBody?.error ||
+      errorBody?.message ||
+      detailedMessage;
+  } catch {
+    // Keep the original message if the response cannot be read.
+  }
+
+  throw new Error(detailedMessage);
+}
 
       const parsedPlan = data?.plan;
       if (!Array.isArray(parsedPlan) || parsedPlan.length === 0) {
