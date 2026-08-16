@@ -934,16 +934,53 @@ export default function App() {
       if (error) throw error;
 
       const parsedPlan = data?.plan;
-      if (!Array.isArray(parsedPlan) || parsedPlan.length !== 36) {
-        throw new Error("Gemini must return exactly 36 weeks; no changes were saved.");
+      if (!Array.isArray(parsedPlan) || parsedPlan.length === 0) {
+        throw new Error("Gemini must return at least one valid week; no changes were saved.");
       }
 
-      const formatted = parsedPlan.map((item, index) => ({
-        ...item,
-        id: String(planRef.current[index]?.id || index + 1),
-        week: String(item.week || index + 1),
-        _sortOrder: index + 1
-      }));
+      const usedIds = new Set();
+      const makeUniqueId = (index) => {
+        let id;
+        do {
+          id = globalThis.crypto?.randomUUID
+            ? `ai-${globalThis.crypto.randomUUID()}`
+            : `ai-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`;
+        } while (usedIds.has(id));
+        return id;
+      };
+
+      const formatted = parsedPlan.map((item, index) => {
+        const requestedId = String(item?.id ?? "").trim();
+        const positionalId = String(planRef.current[index]?.id ?? "").trim();
+        const id = requestedId && !usedIds.has(requestedId)
+          ? requestedId
+          : positionalId && !usedIds.has(positionalId)
+            ? positionalId
+            : makeUniqueId(index);
+
+        usedIds.add(id);
+        return {
+          id,
+          week: String(item?.week ?? index + 1),
+          unit: String(item?.unit ?? ""),
+          reading: String(item?.reading ?? ""),
+          listening: String(item?.listening ?? ""),
+          speaking: String(item?.speaking ?? ""),
+          writing: String(item?.writing ?? ""),
+          grammar: String(item?.grammar ?? ""),
+          vocabulary: String(item?.vocabulary ?? ""),
+          _sortOrder: index + 1
+        };
+      });
+
+      const nextIds = new Set(formatted.map((item) => String(item.id)));
+      planRef.current.forEach((item) => {
+        const id = String(item.id);
+        if (!nextIds.has(id)) {
+          deletedIdsRef.current.add(id);
+          dirtyIdsRef.current.delete(id);
+        }
+      });
 
       applyPlanChange(
         formatted,
@@ -1407,7 +1444,7 @@ export default function App() {
 
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-100 pt-4">
               <div className="text-[11px] text-slate-400 font-medium">
-                Uses Gemini 3 Flash to structure your 36-week plan.
+                Gemini can freely add, remove, reorder, merge, split, or rewrite weeks.
               </div>
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button

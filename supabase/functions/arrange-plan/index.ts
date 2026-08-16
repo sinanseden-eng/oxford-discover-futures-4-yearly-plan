@@ -57,8 +57,8 @@ Deno.serve(async (request) => {
     const plan = body?.plan;
     const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
 
-    if (!Array.isArray(plan) || plan.length !== 36) {
-      return jsonResponse({ error: "The current plan must contain exactly 36 weeks." }, 400);
+    if (!Array.isArray(plan) || plan.length === 0) {
+      return jsonResponse({ error: "The current plan must contain at least one week." }, 400);
     }
     if (!prompt || prompt.length > 20000) {
       return jsonResponse({ error: "Provide instructions between 1 and 20,000 characters." }, 400);
@@ -73,9 +73,12 @@ Deno.serve(async (request) => {
     const systemInstruction = [
       "Act as an expert CEFR B2 ELT curriculum designer.",
       "Update the supplied Oxford Discover Futures 4 yearly plan according to the teacher's request.",
-      "Return exactly 36 week objects and preserve weeks that the request does not affect.",
+      "Freely add, remove, reorder, merge, split, rename, or rewrite weeks when the teacher requests it.",
+      "Return the complete resulting plan as an array containing any positive number of week objects.",
+      "Do not enforce a 36-week total. Preserve content that the teacher did not ask to change.",
       "Every object must contain id, week, unit, reading, listening, speaking, writing, grammar, and vocabulary as strings.",
-      "Never omit weeks, summarize the plan, or return explanatory prose."
+      "Use existing ids for retained weeks and create a unique string id for every newly added week.",
+      "Never summarize the plan or return explanatory prose outside the JSON array."
     ].join(" ");
 
     const responseSchema = {
@@ -122,7 +125,7 @@ Deno.serve(async (request) => {
               parts: [
                 {
                   text:
-                    "Current complete 36-week plan:\n" +
+                    `Current complete plan (${plan.length} weeks):\n` +
                     JSON.stringify(plan) +
                     "\n\nTeacher request:\n" +
                     prompt
@@ -132,6 +135,8 @@ Deno.serve(async (request) => {
           ],
           systemInstruction: { parts: [{ text: systemInstruction }] },
           generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 32768,
             responseMimeType: "application/json",
             responseSchema
           }
@@ -145,15 +150,18 @@ Deno.serve(async (request) => {
       return jsonResponse({ error: message }, 502);
     }
 
-    const rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const responseParts = result?.candidates?.[0]?.content?.parts;
+    const rawText = Array.isArray(responseParts)
+      ? responseParts.map((part: { text?: string }) => part.text || "").join("")
+      : "";
     if (!rawText) {
       return jsonResponse({ error: "Gemini returned an empty response." }, 502);
     }
 
     const arrangedPlan = JSON.parse(rawText);
-    if (!Array.isArray(arrangedPlan) || arrangedPlan.length !== 36) {
+    if (!Array.isArray(arrangedPlan) || arrangedPlan.length === 0) {
       return jsonResponse(
-        { error: "Gemini did not return exactly 36 weeks. Nothing was changed." },
+        { error: "Gemini did not return a valid non-empty plan. Nothing was changed." },
         422
       );
     }

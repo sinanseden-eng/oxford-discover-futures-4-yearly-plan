@@ -17,7 +17,7 @@ to teacher email addresses that the owner has invited and approved.
 - Local browser backup during a connection problem
 - CSV export and print view
 - Gemini requests handled by a protected Supabase Edge Function
-- Rejection of any Gemini result that does not contain exactly 36 weeks
+- Gemini can add, remove, reorder, merge, split and rewrite weeks without a fixed week count
 - Netlify-ready production configuration
 
 ## 1. Create the Supabase backend
@@ -101,6 +101,10 @@ Deploy the function:
 
 The Gemini key is never included in the browser bundle. The function verifies
 the signed-in user and approved-email status before contacting Gemini.
+
+Gemini receives the complete current plan and may return any positive number of
+weeks. Removed rows are deleted from the shared database, new rows receive
+unique IDs, and all returned rows are saved automatically.
 
 ## 6. Run locally
 
