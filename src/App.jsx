@@ -1553,7 +1553,7 @@ export default function App() {
       )}
 
       {/* PLAN GRID TABLE */}
-      <div className="max-w-[1600px] mx-auto">
+      <div className="max-w-[1600px] mx-auto overflow-x-auto">
         {!canEdit && (
           <div className="no-print mb-3 flex items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-bold text-sky-800">
             <UserCheck size={17} />
@@ -1562,7 +1562,7 @@ export default function App() {
               : "Public read-only view. Sign in above with an approved teacher email to edit and autosave."}
           </div>
         )}
-        <div className="hidden xl:grid grid-cols-[50px_70px_1.3fr_1fr_1fr_1fr_1fr_1fr_1fr_50px] gap-3 rounded-t-3xl bg-slate-800 px-5 py-3 text-xs font-black text-white shadow-xl print:hidden">
+        <div className="hidden xl:grid xl:grid-cols-[50px_70px_minmax(220px,1.3fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_50px] gap-3 rounded-t-3xl bg-slate-800 px-5 py-3 text-xs font-black text-white shadow-xl print:hidden">
           <div className="flex justify-center items-center">
             <GripVertical size={16} />
           </div>
@@ -1602,7 +1602,7 @@ export default function App() {
                   onDragOver={(event) => event.preventDefault()}
                   className="print-card group cursor-move rounded-3xl border-2 border-orange-100/80 bg-white/90 p-4 shadow-md transition hover:border-orange-300 hover:shadow-xl xl:rounded-none xl:border-x-0 xl:border-t-0 xl:p-0 xl:shadow-none xl:hover:bg-orange-50/20 print:p-2"
                 >
-                  <div className="print-grid grid grid-cols-1 items-start gap-3 xl:grid-cols-[50px_70px_1.3fr_1fr_1fr_1fr_1fr_1fr_1fr_50px] xl:p-3">
+                  <div className="print-grid grid grid-cols-1 items-start gap-3 xl:grid-cols-[50px_70px_minmax(220px,1.3fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_50px] xl:p-3">
                     <div className="hidden h-full items-center justify-center text-slate-300 transition group-hover:text-orange-500 xl:flex print:hidden">
                       <GripVertical size={20} strokeWidth={2.4} />
                     </div>
@@ -1634,7 +1634,7 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="flex flex-col h-full min-h-[90px]">
+                    <div className="flex min-w-0 flex-col h-full min-h-[90px] xl:min-w-[220px]">
                       <span className="mb-1 text-[11px] font-black uppercase text-orange-600 xl:hidden print:hidden">
                         Unit / Focus
                       </span>
@@ -1644,8 +1644,9 @@ export default function App() {
                           updateItemRaw(weekIdx, "unit", e.target.value)
                         }
                         rows={3}
-                        className="w-full flex-1 min-h-[90px] resize-none rounded-2xl border-2 border-rose-200 bg-rose-50/40 p-2 text-xs font-bold leading-relaxed text-slate-900 outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                        className="w-full flex-1 min-h-[90px] resize-y overflow-auto rounded-2xl border-2 border-rose-200 bg-rose-50/40 p-2 text-xs font-bold leading-relaxed text-slate-900 outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
                         placeholder="Unit Title"
+                        title="Drag the bottom-right corner to change this box's height"
                       />
                     </div>
 
