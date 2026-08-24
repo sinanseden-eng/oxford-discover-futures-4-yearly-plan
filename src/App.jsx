@@ -1634,7 +1634,7 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="flex flex-col">
+                    <div className="flex flex-col h-full min-h-[90px]">
                       <span className="mb-1 text-[11px] font-black uppercase text-orange-600 xl:hidden print:hidden">
                         Unit / Focus
                       </span>
@@ -1643,8 +1643,8 @@ export default function App() {
                         onChange={(e) =>
                           updateItemRaw(weekIdx, "unit", e.target.value)
                         }
-                        rows={2}
-                        className="w-full resize-none rounded-xl border-2 border-rose-200 bg-rose-50/40 px-2.5 py-1.5 text-xs font-bold leading-tight text-slate-900 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                        rows={3}
+                        className="w-full flex-1 min-h-[90px] resize-none rounded-2xl border-2 border-rose-200 bg-rose-50/40 p-2 text-xs font-bold leading-relaxed text-slate-900 outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
                         placeholder="Unit Title"
                       />
                     </div>
