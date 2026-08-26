@@ -3,7 +3,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const allowedOrigin = Deno.env.get("ALLOWED_ORIGIN") || "*";
 const corsHeaders = {
   "Access-Control-Allow-Origin": allowedOrigin,
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 
@@ -17,6 +18,7 @@ Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+
   if (request.method !== "POST") {
     return jsonResponse({ error: "Method not allowed." }, 405);
   }
@@ -33,7 +35,10 @@ Deno.serve(async (request) => {
       Deno.env.get("SUPABASE_PUBLISHABLE_KEY");
 
     if (!supabaseUrl || !publishableKey) {
-      return jsonResponse({ error: "Supabase function configuration is incomplete." }, 500);
+      return jsonResponse(
+        { error: "Supabase function configuration is incomplete." },
+        500
+      );
     }
 
     const userClient = createClient(supabaseUrl, publishableKey, {
@@ -41,33 +46,55 @@ Deno.serve(async (request) => {
       auth: { persistSession: false }
     });
 
-    const { data: userData, error: userError } = await userClient.auth.getUser();
+    const { data: userData, error: userError } =
+      await userClient.auth.getUser();
+
     if (userError || !userData.user) {
-      return jsonResponse({ error: "The teacher session is invalid or expired." }, 401);
+      return jsonResponse(
+        { error: "The teacher session is invalid or expired." },
+        401
+      );
     }
 
     const { data: approved, error: approvalError } = await userClient.rpc(
       "is_current_user_approved"
     );
+
     if (approvalError || approved !== true) {
-      return jsonResponse({ error: "This email is not approved to edit the plan." }, 403);
+      return jsonResponse(
+        { error: "This email is not approved to edit the plan." },
+        403
+      );
     }
 
     const body = await request.json();
     const plan = body?.plan;
-    const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+    const prompt =
+      typeof body?.prompt === "string" ? body.prompt.trim() : "";
 
     if (!Array.isArray(plan) || plan.length === 0) {
-      return jsonResponse({ error: "The current plan must contain at least one week." }, 400);
+      return jsonResponse(
+        { error: "The current plan must contain at least one week." },
+        400
+      );
     }
+
     if (!prompt || prompt.length > 20000) {
-      return jsonResponse({ error: "Provide instructions between 1 and 20,000 characters." }, 400);
+      return jsonResponse(
+        { error: "Provide instructions between 1 and 20,000 characters." },
+        400
+      );
     }
 
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
-    const geminiModel = Deno.env.get("GEMINI_MODEL") || "gemini-3.6-flash";
+    const geminiModel =
+      Deno.env.get("GEMINI_MODEL") || "gemini-3.6-flash";
+
     if (!geminiApiKey) {
-      return jsonResponse({ error: "GEMINI_API_KEY has not been configured." }, 500);
+      return jsonResponse(
+        { error: "GEMINI_API_KEY has not been configured." },
+        500
+      );
     }
 
     const systemInstruction = [
@@ -76,7 +103,10 @@ Deno.serve(async (request) => {
       "Freely add, remove, reorder, merge, split, rename, or rewrite weeks when the teacher requests it.",
       "Return the complete resulting plan as an array containing any positive number of week objects.",
       "Do not enforce a 36-week total. Preserve content that the teacher did not ask to change.",
-      "Every object must contain id, week, unit, reading, listening, speaking, writing, grammar, and vocabulary as strings.",
+      "The studyOrder field contains a semicolon-separated sequence of study items for that week.",
+      "Preserve each studyOrder value verbatim with its matching week and id unless the teacher explicitly asks to create, change, or rearrange study order items.",
+      "When the teacher explicitly requests study-order changes, arrange the items in a logical teaching sequence and separate them with semicolons.",
+      "Every object must contain id, week, unit, studyOrder, reading, listening, speaking, writing, grammar, and vocabulary as strings.",
       "Use existing ids for retained weeks and create a unique string id for every newly added week.",
       "Never summarize the plan or return explanatory prose outside the JSON array."
     ].join(" ");
@@ -89,6 +119,7 @@ Deno.serve(async (request) => {
           id: { type: "STRING" },
           week: { type: "STRING" },
           unit: { type: "STRING" },
+          studyOrder: { type: "STRING" },
           reading: { type: "STRING" },
           listening: { type: "STRING" },
           speaking: { type: "STRING" },
@@ -100,6 +131,7 @@ Deno.serve(async (request) => {
           "id",
           "week",
           "unit",
+          "studyOrder",
           "reading",
           "listening",
           "speaking",
@@ -145,6 +177,7 @@ Deno.serve(async (request) => {
     );
 
     const result = await geminiResponse.json();
+
     if (!geminiResponse.ok) {
       const message = result?.error?.message || "Gemini request failed.";
       return jsonResponse({ error: message }, 502);
@@ -152,16 +185,26 @@ Deno.serve(async (request) => {
 
     const responseParts = result?.candidates?.[0]?.content?.parts;
     const rawText = Array.isArray(responseParts)
-      ? responseParts.map((part: { text?: string }) => part.text || "").join("")
+      ? responseParts
+          .map((part: { text?: string }) => part.text || "")
+          .join("")
       : "";
+
     if (!rawText) {
-      return jsonResponse({ error: "Gemini returned an empty response." }, 502);
+      return jsonResponse(
+        { error: "Gemini returned an empty response." },
+        502
+      );
     }
 
     const arrangedPlan = JSON.parse(rawText);
+
     if (!Array.isArray(arrangedPlan) || arrangedPlan.length === 0) {
       return jsonResponse(
-        { error: "Gemini did not return a valid non-empty plan. Nothing was changed." },
+        {
+          error:
+            "Gemini did not return a valid non-empty plan. Nothing was changed."
+        },
         422
       );
     }
@@ -170,7 +213,10 @@ Deno.serve(async (request) => {
   } catch (error) {
     console.error("arrange-plan failed", error);
     return jsonResponse(
-      { error: error instanceof Error ? error.message : "Unexpected server error." },
+      {
+        error:
+          error instanceof Error ? error.message : "Unexpected server error."
+      },
       500
     );
   }
