@@ -517,6 +517,7 @@ const toDatabaseRow = (item, index, userId = null) => ({
   week: String(item.week),
   sort_order: index + 1,
   unit: item.unit || "",
+  study_order: item.studyOrder || "",
   reading: item.reading || "",
   listening: item.listening || "",
   speaking: item.speaking || "",
@@ -530,6 +531,7 @@ const fromDatabaseRow = (row) => ({
   id: String(row.id),
   week: String(row.week),
   unit: row.unit || "",
+  studyOrder: row.study_order || "",
   reading: row.reading || "",
   listening: row.listening || "",
   speaking: row.speaking || "",
@@ -978,6 +980,9 @@ export default function App() {
           id,
           week: String(item?.week ?? index + 1),
           unit: String(item?.unit ?? ""),
+          studyOrder: String(
+            item?.studyOrder ?? planRef.current[index]?.studyOrder ?? ""
+          ),
           reading: String(item?.reading ?? ""),
           listening: String(item?.listening ?? ""),
           speaking: String(item?.speaking ?? ""),
@@ -1015,6 +1020,7 @@ export default function App() {
     const headers = [
       "Week",
       "Unit & Focus",
+      "Study Order",
       "Reading",
       "Listening",
       "Speaking",
@@ -1025,6 +1031,7 @@ export default function App() {
     const rows = plan.map((item) => [
       item.week,
       item.unit,
+      item.studyOrder || "",
       item.reading,
       item.listening,
       item.speaking,
@@ -1136,6 +1143,63 @@ export default function App() {
     draggedChipRef.current = null;
   };
 
+  const handleOrganizerDrop = (e, targetWeekIndex, targetIndex = null) => {
+    if (!canEdit) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    let dragData = draggedChipRef.current;
+    if (!dragData) {
+      try {
+        const raw = e.dataTransfer.getData("text/plain");
+        if (raw) dragData = JSON.parse(raw);
+      } catch {
+        return;
+      }
+    }
+
+    if (!dragData || dragData.field !== "studyOrder") return;
+
+    const {
+      weekIndex: sourceWeekIndex,
+      itemIndex: sourceIndex
+    } = dragData;
+    const updated = plan.map((week) => ({ ...week }));
+    const sourceItems = parseItems(updated[sourceWeekIndex].studyOrder);
+    const [movedItem] = sourceItems.splice(sourceIndex, 1);
+
+    if (!movedItem) return;
+
+    updated[sourceWeekIndex].studyOrder = stringifyItems(sourceItems);
+
+    const targetItems = sourceWeekIndex === targetWeekIndex
+      ? sourceItems
+      : parseItems(updated[targetWeekIndex].studyOrder);
+
+    let insertionIndex = targetIndex === null
+      ? targetItems.length
+      : targetIndex;
+
+    if (
+      sourceWeekIndex === targetWeekIndex &&
+      targetIndex !== null &&
+      sourceIndex < targetIndex
+    ) {
+      insertionIndex -= 1;
+    }
+
+    insertionIndex = Math.max(0, Math.min(insertionIndex, targetItems.length));
+    targetItems.splice(insertionIndex, 0, movedItem);
+    updated[targetWeekIndex].studyOrder = stringifyItems(targetItems);
+
+    const changedIds = sourceWeekIndex === targetWeekIndex
+      ? [updated[targetWeekIndex].id]
+      : [updated[sourceWeekIndex].id, updated[targetWeekIndex].id];
+
+    applyPlanChange(updated, changedIds);
+    draggedChipRef.current = null;
+  };
+
   const updateItemRaw = (index, field, value) => {
     if (!canEdit) return;
     const updated = [...plan];
@@ -1154,12 +1218,53 @@ export default function App() {
 
   const addNewChip = (weekIndex, field) => {
     if (!canEdit) return;
-    const newTopic = prompt("Enter new word, skill, or topic:");
+    const newTopic = prompt(
+      field === "studyOrder"
+        ? "Enter a study item:"
+        : "Enter new word, skill, or topic:"
+    );
     if (!newTopic || !newTopic.trim()) return;
     const updated = [...plan];
     const items = parseItems(updated[weekIndex][field]);
     items.push(newTopic.trim());
     updated[weekIndex][field] = stringifyItems(items);
+    applyPlanChange(updated, [updated[weekIndex].id]);
+  };
+
+  const collectStudyTopics = (weekIndex) => {
+    if (!canEdit) return;
+
+    const categoryFields = [
+      "reading",
+      "listening",
+      "speaking",
+      "writing",
+      "grammar",
+      "vocabulary"
+    ];
+    const currentItems = parseItems(plan[weekIndex].studyOrder);
+    const existingItems = new Set(
+      currentItems.map((item) => item.toLocaleLowerCase())
+    );
+    const collectedItems = categoryFields
+      .flatMap((field) => parseItems(plan[weekIndex][field]))
+      .filter((item) => {
+        const normalizedItem = item.toLocaleLowerCase();
+        if (existingItems.has(normalizedItem)) return false;
+        existingItems.add(normalizedItem);
+        return true;
+      });
+
+    if (collectedItems.length === 0) {
+      setSaveStatus("All available topics are already in Study Order");
+      return;
+    }
+
+    const updated = [...plan];
+    updated[weekIndex] = {
+      ...updated[weekIndex],
+      studyOrder: stringifyItems([...currentItems, ...collectedItems])
+    };
     applyPlanChange(updated, [updated[weekIndex].id]);
   };
 
@@ -1189,6 +1294,7 @@ export default function App() {
       id: Date.now().toString(),
       week: (plan.length + 1).toString(),
       unit: "New Topic / Unit",
+      studyOrder: "",
       reading: "",
       listening: "",
       speaking: "",
@@ -1569,7 +1675,7 @@ export default function App() {
           <div className="flex items-center gap-1">
             <Calendar size={14} /> Wk
           </div>
-          <div>Unit & Focus</div>
+          <div>Unit, Focus & Study Order</div>
           <div>📖 Reading</div>
           <div>🎧 Listening</div>
           <div>💬 Speaking</div>
@@ -1586,6 +1692,7 @@ export default function App() {
         >
           {plan.map((item, weekIdx) => {
             const semesterLabel = getSemesterLabel(weekIdx);
+            const organizerItems = parseItems(item.studyOrder);
             return (
               <React.Fragment key={item.id}>
                 {semesterLabel && (
@@ -1634,20 +1741,127 @@ export default function App() {
                       />
                     </div>
 
-                    <div className="flex min-w-0 flex-col h-full min-h-[90px] xl:min-w-[220px]">
-                      <span className="mb-1 text-[11px] font-black uppercase text-orange-600 xl:hidden print:hidden">
-                        Unit / Focus
-                      </span>
-                      <textarea
-                        value={item.unit}
-                        onChange={(e) =>
-                          updateItemRaw(weekIdx, "unit", e.target.value)
-                        }
-                        rows={3}
-                        className="w-full flex-1 min-h-[90px] resize-y overflow-auto rounded-2xl border-2 border-rose-200 bg-rose-50/40 p-2 text-xs font-bold leading-relaxed text-slate-900 outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
-                        placeholder="Unit Title"
-                        title="Drag the bottom-right corner to change this box's height"
-                      />
+                    <div className="flex min-w-0 flex-col gap-3 h-full min-h-[90px] xl:min-w-[220px]">
+                      <div className="flex flex-col">
+                        <span className="mb-1 text-[11px] font-black uppercase text-orange-600 xl:hidden print:hidden">
+                          Unit / Focus
+                        </span>
+                        <textarea
+                          value={item.unit}
+                          onChange={(e) =>
+                            updateItemRaw(weekIdx, "unit", e.target.value)
+                          }
+                          rows={3}
+                          className="w-full min-h-[90px] resize-y overflow-auto rounded-2xl border-2 border-rose-200 bg-rose-50/40 p-2 text-xs font-bold leading-relaxed text-slate-900 outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                          placeholder="Unit Title"
+                          title="Drag the bottom-right corner to change this box's height"
+                        />
+                      </div>
+
+                      <div
+                        className="flex min-h-[150px] flex-1 flex-col rounded-2xl border-2 border-indigo-200 bg-gradient-to-br from-indigo-50/90 to-violet-50/70 p-2 shadow-sm transition hover:border-indigo-300"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => handleOrganizerDrop(e, weekIdx)}
+                      >
+                        <div className="mb-2 flex items-center justify-between gap-2 border-b border-indigo-200/70 pb-1.5">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-indigo-700">
+                            <span aria-hidden="true">🧭</span> Study Order
+                          </span>
+                          <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-black text-indigo-700">
+                            {organizerItems.length}
+                          </span>
+                        </div>
+
+                        {viewMode === "chips" ? (
+                          <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto pr-0.5">
+                            {organizerItems.map((studyItem, organizerIdx) => (
+                              <div
+                                key={`${studyItem}-${organizerIdx}`}
+                                draggable={canEdit}
+                                onDragStart={(e) =>
+                                  handleChipDragStart(
+                                    e,
+                                    weekIdx,
+                                    "studyOrder",
+                                    organizerIdx,
+                                    studyItem
+                                  )
+                                }
+                                onDragEnd={handleChipDragEnd}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                }}
+                                onDrop={(e) =>
+                                  handleOrganizerDrop(e, weekIdx, organizerIdx)
+                                }
+                                onClick={() =>
+                                  startEditingChip(
+                                    weekIdx,
+                                    "studyOrder",
+                                    organizerIdx,
+                                    studyItem
+                                  )
+                                }
+                                className="group/study flex cursor-grab items-start gap-1.5 rounded-xl border border-indigo-200 bg-white/90 px-1.5 py-1.5 text-[11px] font-bold leading-tight text-indigo-950 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-400 hover:shadow active:cursor-grabbing"
+                                title="Drag to reorder or move to another week; click to edit"
+                              >
+                                <span className="flex h-5 min-w-5 select-none items-center justify-center rounded-full bg-indigo-600 px-1 text-[9px] font-black text-white">
+                                  {organizerIdx + 1}
+                                </span>
+                                <span className="min-w-0 flex-1 break-words pt-0.5">
+                                  {studyItem}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteChip(weekIdx, "studyOrder", organizerIdx);
+                                  }}
+                                  className="rounded p-0.5 text-indigo-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover/study:opacity-100"
+                                  title="Delete study item"
+                                >
+                                  <X size={11} strokeWidth={3} />
+                                </button>
+                              </div>
+                            ))}
+
+                            {organizerItems.length === 0 && (
+                              <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-indigo-200 px-2 py-4 text-center text-[10px] font-semibold text-indigo-400">
+                                Add items or collect this week&apos;s topics
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <textarea
+                            value={item.studyOrder || ""}
+                            onChange={(e) =>
+                              updateItemRaw(weekIdx, "studyOrder", e.target.value)
+                            }
+                            rows={6}
+                            className="min-h-[110px] w-full flex-1 resize-y rounded-xl border border-indigo-100 bg-white/70 p-2 text-xs font-semibold leading-relaxed text-indigo-950 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                            placeholder="Enter one study item per line, or separate items with semicolons..."
+                          />
+                        )}
+
+                        <div className="no-print mt-2 flex flex-wrap justify-end gap-1 border-t border-indigo-200/70 pt-1.5">
+                          <button
+                            type="button"
+                            onClick={() => collectStudyTopics(weekIdx)}
+                            className="rounded-lg px-1.5 py-1 text-[9px] font-black text-indigo-600 transition hover:bg-white hover:text-indigo-800"
+                            title="Copy this week's category topics into Study Order without duplicates"
+                          >
+                            Collect Topics
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => addNewChip(weekIdx, "studyOrder")}
+                            className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-1.5 py-1 text-[9px] font-black text-white transition hover:bg-indigo-700"
+                          >
+                            <Plus size={11} strokeWidth={3} /> Add Item
+                          </button>
+                        </div>
+                      </div>
                     </div>
 
                     {[
