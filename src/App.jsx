@@ -1321,7 +1321,7 @@ export default function App() {
   };
 
   const getSemesterLabel = (index) =>
-    index === 0 ? "Semester 1" : index === 18 ? "Semester 2" : null;
+    index === 0 ? "Semester 1" : index === 19 ? "Semester 2" : null;
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#ffe4e6_0,#fff7ed_35%,#f8fafc_75%)] text-slate-900 font-sans p-3 md:p-8 print:bg-white print:p-0">
@@ -1329,7 +1329,7 @@ export default function App() {
         @media print {
           .no-print { display: none !important; }
           .print-card { box-shadow: none !important; border: 1px solid #cbd5e1 !important; break-inside: avoid; }
-          .print-grid { display: grid !important; grid-template-columns: 50px 1.4fr 1fr 1fr 1fr 1fr 1fr 1fr !important; gap: 6px !important; }
+          .print-grid { display: grid !important; grid-template-columns: 110px 1.4fr 1fr 1fr 1fr 1fr 1fr 1fr !important; gap: 6px !important; }
           textarea, input { border: 0 !important; background: white !important; box-shadow: none !important; resize: none !important; }
         }
       `}</style>
@@ -1668,12 +1668,12 @@ export default function App() {
               : "Public read-only view. Sign in above with an approved teacher email to edit and autosave."}
           </div>
         )}
-        <div className="hidden xl:grid xl:grid-cols-[50px_70px_minmax(220px,1.3fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_50px] gap-3 rounded-t-3xl bg-slate-800 px-5 py-3 text-xs font-black text-white shadow-xl print:hidden">
+        <div className="hidden xl:grid xl:grid-cols-[50px_160px_minmax(220px,1.3fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_50px] gap-3 rounded-t-3xl bg-slate-800 px-5 py-3 text-xs font-black text-white shadow-xl print:hidden">
           <div className="flex justify-center items-center">
             <GripVertical size={16} />
           </div>
           <div className="flex items-center gap-1">
-            <Calendar size={14} /> Wk
+            <Calendar size={14} /> Week / Date
           </div>
           <div>Unit, Focus & Study Order</div>
           <div>📖 Reading</div>
@@ -1709,7 +1709,7 @@ export default function App() {
                   onDragOver={(event) => event.preventDefault()}
                   className="print-card group cursor-move rounded-3xl border-2 border-orange-100/80 bg-white/90 p-4 shadow-md transition hover:border-orange-300 hover:shadow-xl xl:rounded-none xl:border-x-0 xl:border-t-0 xl:p-0 xl:shadow-none xl:hover:bg-orange-50/20 print:p-2"
                 >
-                  <div className="print-grid grid grid-cols-1 items-start gap-3 xl:grid-cols-[50px_70px_minmax(220px,1.3fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_50px] xl:p-3">
+                  <div className="print-grid grid grid-cols-1 items-start gap-3 xl:grid-cols-[50px_160px_minmax(220px,1.3fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_minmax(165px,1fr)_50px] xl:p-3">
                     <div className="hidden h-full items-center justify-center text-slate-300 transition group-hover:text-orange-500 xl:flex print:hidden">
                       <GripVertical size={20} strokeWidth={2.4} />
                     </div>
@@ -1730,14 +1730,14 @@ export default function App() {
                       <span className="mb-1 flex items-center gap-1 text-[11px] font-black uppercase text-orange-600 xl:hidden print:hidden">
                         <Calendar size={12} /> Week
                       </span>
-                      <input
-                        type="text"
+                      <textarea
                         value={item.week}
                         onChange={(e) =>
                           updateItemRaw(weekIdx, "week", e.target.value)
                         }
-                        className="w-full rounded-xl border-2 border-orange-200 bg-orange-50/50 px-2 py-1.5 text-center font-black text-slate-800 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
-                        placeholder="Wk"
+                        rows={2}
+                        className="min-h-[52px] w-full resize-y rounded-xl border-2 border-orange-200 bg-orange-50/50 px-3 py-2 text-center text-sm font-black leading-snug text-slate-800 outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                        placeholder="Week / date range"
                       />
                     </div>
 
@@ -1986,3 +1986,4 @@ export default function App() {
     </div>
   );
 }
+
